@@ -76,7 +76,7 @@ namespace Renderloom
         public TextMeshPro bakeText;   // 3D TMP
 
         [Header("Eviction Watermark")]
-        [Tooltip("������ʣ��ռ���� <= ��ֵʱ������һ������ǰ���� EvictSome(1)")]
+        [Tooltip("freeRatio <= freeWatermark, then EvictSome(1)")]
         [Range(0.0f, 1.0f)] public float freeWatermark = 0.20f;
 
         // Native containers for cache structures
