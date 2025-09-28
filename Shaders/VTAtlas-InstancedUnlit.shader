@@ -26,7 +26,7 @@ Shader "VT/VTAtlas-InstancedUnlit"
             SamplerState sampler_AtlasTex;
 
             CBUFFER_START(InstanceCBuffer)
-                float4 _InstanceCBuffer[256*4]; // 256 ÊµÀı ¡Á Ã¿ÊµÀı 4 ¸ö float4
+                float4 _InstanceCBuffer[256*4]; // 256 å®ä¾‹ Ã— æ¯å®ä¾‹ 4 ä¸ª float4
             CBUFFER_END
 
             struct VSIn {
