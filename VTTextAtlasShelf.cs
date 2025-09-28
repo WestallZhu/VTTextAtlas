@@ -91,7 +91,7 @@ namespace Renderloom
         private RenderTexture _atlas;
         private int _tick;
 
-        // booked area using with-padding + shelf height
+        // booked area with padding + shelf height
         private long _bookedArea; // sum(placedWithPad.w * placedWithPad.h)
 
         static VTTextAtlasShelf _inst;
@@ -346,7 +346,7 @@ namespace Renderloom
 
         RenderTexture BakeToTempRT(string text, in TextBakeParamsNative p, int W, int H)
         {
-            var fmt = RenderTextureFormat.R8; // sRGB-capable in Linear projects
+            var fmt = RenderTextureFormat.R8; 
             var rt = RenderTexture.GetTemporary(W, H, 0, fmt);
             rt.wrapMode = TextureWrapMode.Clamp;
             rt.filterMode = atlasFilter;
@@ -467,13 +467,13 @@ namespace Renderloom
             return new DebugStats
             {
                 activeEntries   = active,
-                freeBlocks      = -1,
+                freeBlocks      = -1,            // not tracked for shelf allocator
                 freeArea        = freeArea,
                 usedAreaInner   = inner,
                 usedAreaWithPad = usedWithPad,
                 usageInner      = (float)inner / (texW * texH),
                 usageWithPad    = (float)usedWithPad / (texW * texH),
-                evictHeapCount  = _evictHeap.Count,
+                evictHeapCount  = _evictLru.Count,
                 freeRatioBooked = freeRatio
             };
         }

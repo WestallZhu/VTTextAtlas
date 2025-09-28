@@ -322,7 +322,7 @@ namespace Renderloom
         }
 
         // Free a horizontal padded segment back to its shelf and merge neighbors
-        // �黹�� padding ��ˮƽ�Σ��� x ������� + ���������ھӺϲ�����������ɨ��/��ѭ����
+        // Insert by x-order, then merge adjacent in one pass
 public void Free(int shelfIdx, int xPad, int wPad)
 {
     if (shelfIdx < 0 || shelfIdx >= _shelves.Length || wPad <= 0) return;
@@ -330,7 +330,7 @@ public void Free(int shelfIdx, int xPad, int wPad)
     var shelf = _shelves[shelfIdx];
     if (shelf.alive == 0) return;
 
-    // 1) �ڸ��а� x �����ҵ�����λ�� prev -> cur
+    // 1) Find insert position by x in shelf: prev -> cur
     int prev = -1, cur = shelf.firstSeg;
     while (cur != -1 && _segs[cur].x < xPad)
     {
@@ -338,7 +338,7 @@ public void Free(int shelfIdx, int xPad, int wPad)
         cur = _segs[cur].nextInShelf;
     }
 
-    // 2) new �Σ��Ȳ��� bin����ֹ������ bin ����״̬���ң�
+    // 2) Create new seg; do not insert into bin yet to avoid transient inconsistency
     int sIdx = AllocSeg();
     _segs[sIdx] = new Seg
     {
@@ -346,7 +346,7 @@ public void Free(int shelfIdx, int xPad, int wPad)
         nextInShelf = -1, nextInBin = -1, alive = 1
     };
 
-    // 3) ���ӵ�����������prev ֮�� / ��Ϊͷ��
+    // 3) Insert into shelf list: after prev or as head
     if (prev < 0)
     {
         _segs.GetUnsafePtr()[sIdx].nextInShelf = shelf.firstSeg;
@@ -361,33 +361,32 @@ public void Free(int shelfIdx, int xPad, int wPad)
         _segs[prev] = p;
     }
 
-    // 4) �����ھӺϲ������������ӣ�
+    // 4) Merge with left neighbor if contiguous
     if (prev != -1)
     {
         var left = _segs[prev];
         var me   = _segs[sIdx];
         if (left.x + left.w == me.x)
         {
-            // �� bin ��ȥ����Σ���������ʧ��
+            // Remove left from bin to avoid stale entry
             BinRemove(MakeShelfKey(shelf.h, left.w), prev);
 
-            // �����������Ƴ����
+            // Detach left from shelf list
             ShelfRemoveSeg(shelfIdx, prev);
 
-            // �ϲ��� me
+            // Merge into me
             me.x = left.x;
             me.w += left.w;
             _segs[sIdx] = me;
 
-            // �ͷ��������
+            // Free left segment
             FreeSeg(prev);
 
-            // ע�⣺��ʱ sIdx ǰ���ı��ˣ��������� prev �����´���ͷ���ң�
-            // ���Һϲ�����Ҫ prev��
+            // Note: sIdx may shift; prev not needed for right merge
         }
     }
 
-    // 5) �����ھӺϲ������������ӣ�
+    // 5) Merge with right neighbor if contiguous
     int next = _segs[sIdx].nextInShelf;
     if (next != -1)
     {
@@ -395,24 +394,24 @@ public void Free(int shelfIdx, int xPad, int wPad)
         var right = _segs[next];
         if (me.x + me.w == right.x)
         {
-            // ȥ���Ҷε� bin ��¼
+            // Remove right from bin
             BinRemove(MakeShelfKey(shelf.h, right.w), next);
 
-            // ������ժ���ҶΣ��� me �� next ָ�� right �� next
+            // Fix links: me.next = right.next
             var me2 = _segs[sIdx];
             me2.nextInShelf = right.nextInShelf;
             _segs[sIdx] = me2;
 
-            // �ϲ�
+            // Merge
             me2.w += right.w;
             _segs[sIdx] = me2;
 
-            // �����Ҷ�����
+            // Free right segment
             FreeSeg(next);
         }
     }
 
-    // 6) ����ٰ� me��sIdx���� bin���������ȶ���
+    // 6) Insert merged seg back into bin
     BinInsert(MakeShelfKey(_shelves[shelfIdx].h, _segs[sIdx].w), sIdx);
 }
 
@@ -438,3 +437,4 @@ public void Free(int shelfIdx, int xPad, int wPad)
 #endif
     }
 }
+
