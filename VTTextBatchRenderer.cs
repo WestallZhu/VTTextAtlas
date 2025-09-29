@@ -73,11 +73,6 @@ namespace Renderloom
         void OnDisable()
         {
             if (_instanceBuffer != null) { _instanceBuffer.Release(); _instanceBuffer = null; }
-        }
-
-        void OnDestroy()
-        {
-            if (_instanceBuffer != null) { _instanceBuffer.Release(); _instanceBuffer = null; }
             if (_instances.IsCreated)      _instances.Dispose();
             if (_indexToHandle.IsCreated)  _indexToHandle.Dispose();
             if (_handleToIndex.IsCreated)  _handleToIndex.Dispose();
