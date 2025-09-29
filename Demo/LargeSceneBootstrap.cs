@@ -1,4 +1,5 @@
 using TMPro;
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace Renderloom
@@ -68,7 +69,7 @@ namespace Renderloom
 
         private struct Active
         {
-            public int handle;
+            public int2 handle;
             public Hash128 key;
             public Vector2Int pxSize;
             public Vector3 pos;
@@ -224,7 +225,7 @@ namespace Renderloom
             // Bake or hit cache
             var uv = _atlas.GetOrBake(txt, _bakeParams);
             // Instance add
-            int handle = _batch.AddInstance(
+            int2 handle = _batch.AddInstance(
                 uv.atlasRect01, uv.pixelSize, pos,
                 Color.white, 0f, new Vector2(0.5f, 0.5f), pos.z);
 

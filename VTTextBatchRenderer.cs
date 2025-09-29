@@ -32,23 +32,22 @@ namespace Renderloom
         }
 
         private NativeList<InstanceGPU> _instances;
-        private NativeList<int>          _indexToHandle;     // index -> handle
-        private NativeHashMap<int,int>   _handleToIndex;     // handle -> index
-        private NativeList<int>          _freeHandles;
-        private int                      _nextHandle = 1;
+        private NativeList<int2> _indexToEntity;  // arrayIndex -> entity(int2)
+        private EntityIndexer _indexer;
 
-        // GPU buffers
+        // GPU buffers (Constant Buffer for DIP)
         private ComputeBuffer _instanceBuffer;
-        private Mesh          _quad;
-        private Bounds        _bounds;
-        private bool          _buffersDirty = true;
+        private Mesh _quad;
+        private Bounds _bounds;
+        private bool _buffersDirty = true;
+
+        const int kFloat4Stride = 16; // bytes
 
         public int AliveCount => _instances.IsCreated ? _instances.Length : 0;
 
         void OnEnable()
         {
-            if (!shader)
-                shader = Shader.Find("VT/VTAtlas-InstancedUnlit");
+            if (!shader) shader = Shader.Find("VT/VTAtlas-InstancedUnlit");
             if (!material && shader)
             {
                 material = new Material(shader) { name = "VT_Instanced_Text_Mat" };
@@ -56,13 +55,10 @@ namespace Renderloom
             }
             if (atlasTexture && material) material.SetTexture("_AtlasTex", atlasTexture);
 
-            if (!_instances.IsCreated)
-            {
-                _instances      = new NativeList<InstanceGPU>(initialCapacity, Allocator.Persistent);
-                _indexToHandle  = new NativeList<int>(initialCapacity, Allocator.Persistent);
-                _handleToIndex  = new NativeHashMap<int,int>(initialCapacity, Allocator.Persistent);
-                _freeHandles    = new NativeList<int>(Allocator.Persistent);
-            }
+            if (_indexer == null) _indexer = new EntityIndexer();
+
+            if (!_instances.IsCreated) _instances = new NativeList<InstanceGPU>(initialCapacity, Allocator.Persistent);
+            if (!_indexToEntity.IsCreated) _indexToEntity = new NativeList<int2>(initialCapacity, Allocator.Persistent);
 
             if (_quad == null) _quad = BuildUnitQuad();
             CreateOrResizeBuffers(math.max(1, initialCapacity));
@@ -73,10 +69,11 @@ namespace Renderloom
         void OnDisable()
         {
             if (_instanceBuffer != null) { _instanceBuffer.Release(); _instanceBuffer = null; }
-            if (_instances.IsCreated)      _instances.Dispose();
-            if (_indexToHandle.IsCreated)  _indexToHandle.Dispose();
-            if (_handleToIndex.IsCreated)  _handleToIndex.Dispose();
-            if (_freeHandles.IsCreated)    _freeHandles.Dispose();
+
+            if (_instances.IsCreated) _instances.Dispose();
+            if (_indexToEntity.IsCreated) _indexToEntity.Dispose();
+
+            if (_indexer != null) { _indexer.Dispose(); _indexer = null; }
         }
 
         Mesh BuildUnitQuad()
@@ -90,24 +87,28 @@ namespace Renderloom
                 new Vector2(0,0), new Vector2(1,0),
                 new Vector2(1,1), new Vector2(0,1)
             };
-            var idx = new int[] { 0,1,2, 0,2,3 };
+            var idx = new int[] { 0, 1, 2, 0, 2, 3 };
             m.SetVertices(v); m.SetUVs(0, uv); m.SetIndices(idx, MeshTopology.Triangles, 0, false);
             m.UploadMeshData(true);
             return m;
         }
 
-        const int kFloat4Stride = 16;
-        void CreateOrResizeBuffers(int capacity)
+        void CreateOrResizeBuffers(int capacityInstances)
         {
-            capacity = math.clamp(capacity, 1, maxCapacity);
-            int stride = Marshal.SizeOf<InstanceGPU>();
+            capacityInstances = math.clamp(capacityInstances, 1, maxCapacity);
+            int stride = Marshal.SizeOf<InstanceGPU>();   // 64 bytes / instance
+            int float4Count = (stride * capacityInstances) / kFloat4Stride; // 4 * instances
 
-            if (_instanceBuffer == null || _instanceBuffer.count < capacity)
+            if (_instanceBuffer == null || _instanceBuffer.count < float4Count)
             {
                 if (_instanceBuffer != null) _instanceBuffer.Release();
-                int size = stride * capacity;
-                _instanceBuffer = new ComputeBuffer(size / kFloat4Stride, kFloat4Stride, ComputeBufferType.Constant);
-                if (material) material.SetConstantBuffer("InstanceCBuffer", _instanceBuffer, 0, size);
+                _instanceBuffer = new ComputeBuffer(float4Count, kFloat4Stride, ComputeBufferType.Constant);
+
+                if (material)
+                {
+                    int sizeBytes = stride * capacityInstances;
+                    material.SetConstantBuffer("InstanceCBuffer", _instanceBuffer, 0, sizeBytes);
+                }
             }
         }
 
@@ -117,93 +118,106 @@ namespace Renderloom
             if (material) material.SetTexture("_AtlasTex", atlasTexture);
         }
 
-        public int AddInstance(Vector4 atlasRect01, Vector2 pixelSize, Vector3 worldPosPivot,
-                               Color color, float rotationRad = 0f, Vector2? pivot01 = null, float orderZ = 0f)
+
+        public int2 AddInstance(Vector4 atlasRect01, Vector2 pixelSize, Vector3 worldPosPivot,
+                                Color color, float rotationRad = 0f, Vector2? pivot01 = null, float orderZ = 0f)
         {
             var inst = new InstanceGPU();
             Vector2 sizeWorld = pixelSize / pixelsPerUnit;
-            inst.posSize   = new Vector4(worldPosPivot.x, worldPosPivot.y, sizeWorld.x, sizeWorld.y);
+            inst.posSize = new Vector4(worldPosPivot.x, worldPosPivot.y, sizeWorld.x, sizeWorld.y);
             inst.atlasRect = atlasRect01;
-            inst.color     = color;
+            inst.color = color;
             var pv = pivot01 ?? new Vector2(0.5f, 0.5f);
-            inst.extra     = new Vector4(pv.x, pv.y, rotationRad, orderZ);
-
-            if (_instanceBuffer == null || _instances.Length == _instanceBuffer.count)
-                CreateOrResizeBuffers(math.min(math.max(1, (_instanceBuffer != null ? _instanceBuffer.count : 0) * 2), maxCapacity));
+            inst.extra = new Vector4(pv.x, pv.y, rotationRad, orderZ);
 
             _instances.Add(inst);
-            int idx = _instances.Length - 1;
+            int arrayIdx = _instances.Length - 1;
 
-            int handle = (_freeHandles.Length > 0) ? _freeHandles[_freeHandles.Length - 1] : _nextHandle++;
-            if (_freeHandles.Length > 0) _freeHandles.RemoveAtSwapBack(_freeHandles.Length - 1);
-            if (handle == 0) handle = _nextHandle++;
-            _indexToHandle.Add(handle);
-            _handleToIndex.TryAdd(handle, idx);
+            var entity = _indexer.CreateEntity(arrayIdx);
+            _indexToEntity.Add(entity);
+
+            if (_instanceBuffer == null || _instanceBuffer.count < _instances.Length * 4)
+                CreateOrResizeBuffers(math.min(math.max(1, _instances.Length * 2), maxCapacity));
 
             _buffersDirty = true;
-            return handle;
+            return entity;
         }
 
-        public bool RemoveInstance(int handle)
+        public bool RemoveInstance(int2 entity)
         {
-            if (!_handleToIndex.TryGetValue(handle, out int idx)) return false;
+            if (_indexer == null || !_indexer.IsValid(entity)) return false;
+
+            int arrayIdx = _indexer.GetItem(entity).x;
             int last = _instances.Length - 1;
 
-            if (idx != last)
+            if (arrayIdx != last)
             {
-                var moved = _instances[last];
-                _instances[idx] = moved;
+                // swap denseIdx
+                var movedInst = _instances[last];
+                var movedHandle = _indexToEntity[last];
 
-                int movedHandle = _indexToHandle[last];
-                _indexToHandle[idx] = movedHandle;
-                _handleToIndex[movedHandle] = idx;
+                _instances[arrayIdx] = movedInst;
+                _indexToEntity[arrayIdx] = movedHandle;
+
+                // update  movedHandle 
+                _indexer.UpdateIndex(movedHandle, arrayIdx);
             }
 
-            _instances.RemoveAtSwapBack(idx);
-            _indexToHandle.RemoveAtSwapBack(idx);
-            _handleToIndex.Remove(handle);
-            _freeHandles.Add(handle);
+            _instances.RemoveAt(last);
+            _indexToEntity.RemoveAt(last);
+
+            _indexer.DestroyEntity(entity);
 
             _buffersDirty = true;
             return true;
         }
 
-        public bool UpdateTransform(int handle, Vector3 worldPosPivot, Vector2 pixelSize, float rotationRad, float orderZ)
+        public bool UpdateTransform(int2 entity, Vector3 worldPosPivot, Vector2 pixelSize, float rotationRad, float orderZ)
         {
-            if (!_handleToIndex.TryGetValue(handle, out int idx)) return false;
-            var inst = _instances[idx];
+            if (_indexer == null || !_indexer.IsValid(entity)) return false;
+            int arrayIdx = _indexer.GetItem(entity).x;
+
+            var inst = _instances[arrayIdx];
             Vector2 sizeWorld = pixelSize / pixelsPerUnit;
             inst.posSize = new Vector4(worldPosPivot.x, worldPosPivot.y, sizeWorld.x, sizeWorld.y);
             inst.extra.z = rotationRad;
             inst.extra.w = orderZ;
-            _instances[idx] = inst;
+            _instances[arrayIdx] = inst;
+
             _buffersDirty = true;
             return true;
         }
 
-        public bool UpdateColor(int handle, Color color)
+        public bool UpdateColor(int2 entity, Color color)
         {
-            if (!_handleToIndex.TryGetValue(handle, out int idx)) return false;
-            var inst = _instances[idx];
+            if (_indexer == null || !_indexer.IsValid(entity)) return false;
+            int arrayIdx = _indexer.GetItem(entity).x;
+
+            var inst = _instances[arrayIdx];
             inst.color = color;
-            _instances[idx] = inst;
+            _instances[arrayIdx] = inst;
+
             _buffersDirty = true;
             return true;
         }
 
-        public bool UpdateUV(int handle, Vector4 atlasRect01, Vector2 pixelSize)
+        public bool UpdateUV(int2 entity, Vector4 atlasRect01, Vector2 pixelSize)
         {
-            if (!_handleToIndex.TryGetValue(handle, out int idx)) return false;
-            var inst = _instances[idx];
+            if (_indexer == null || !_indexer.IsValid(entity)) return false;
+            int arrayIdx = _indexer.GetItem(entity).x;
+
+            var inst = _instances[arrayIdx];
             inst.atlasRect = atlasRect01;
             Vector2 sizeWorld = pixelSize / pixelsPerUnit;
             inst.posSize.z = sizeWorld.x;
             inst.posSize.w = sizeWorld.y;
-            _instances[idx] = inst;
+            _instances[arrayIdx] = inst;
+
             _buffersDirty = true;
             return true;
         }
 
+        public bool IsValid(in int2 entity) => _indexer != null && _indexer.IsValid(entity);
         void LateUpdate()
         {
             int count = _instances.IsCreated ? _instances.Length : 0;
